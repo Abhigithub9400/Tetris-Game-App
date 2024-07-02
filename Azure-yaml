@@ -1,0 +1,84 @@
+trigger:
+- main  # or your default branch
+
+resources:
+- repo: self
+
+variables:
+  imageName: 'abhijithdockerhub/test'
+  tag: '$(Build.BuildId)'
+
+stages:
+- stage: Build
+  displayName: Build image
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: Devops
+      demands:
+        - agent.name -equals Devops01
+    steps:
+    - task: Docker@2
+      displayName: Build an image
+      inputs:
+        command: build
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        repository: $(imageName)
+        tags: |
+          $(tag)
+          latest
+
+    - task: Docker@2
+      displayName: Push image
+      inputs:
+        containerRegistry: 'Docker-Connection'
+        repository: $(imageName)
+        command: 'push'
+        tags: |
+          $(tag)
+          latest
+
+- stage: Deploy
+  displayName: Deploy to Production
+  jobs:
+  - deployment: DeployToProduction
+    displayName: Deploy Container
+    environment: 'production'
+    pool:
+      name: Devops
+      demands:
+        - agent.name -equals Devops01
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: SSH@0
+            inputs:
+              sshEndpoint: 'Agent-server-ssh connection'
+              runOptions: 'inline'
+              inline: |
+                #!/bin/bash
+                set -e
+
+                # Pull the latest image
+                docker pull $(imageName):$(tag)
+
+                # Stop and remove the existing container (if it exists)
+                if docker ps -a --format '{{.Names}}' | grep -q '^myapp$'; then
+                    echo "Stopping and removing existing myapp container..."
+                    docker stop myapp
+                    docker rm myapp
+                else
+                    echo "No existing myapp container found."
+                fi
+
+                # Run the new container
+                echo "Starting new myapp container..."
+                docker run -d --name myapp -p 80:80 $(imageName):$(tag)
+
+                # Clean up old images
+                echo "Cleaning up old images..."
+                docker image prune -f
+
+                echo "Deployment completed successfully."
